@@ -20,17 +20,17 @@ const CLIENT_DIST = path.join(__dirname, "dist", "client");
 
 // Mime types for static assets
 const MIME = {
-  ".js":   "application/javascript",
-  ".mjs":  "application/javascript",
-  ".css":  "text/css",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".css": "text/css",
   ".html": "text/html",
   ".json": "application/json",
-  ".png":  "image/png",
-  ".jpg":  "image/jpeg",
-  ".svg":  "image/svg+xml",
-  ".ico":  "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
   ".woff": "font/woff",
-  ".woff2":"font/woff2",
+  ".woff2": "font/woff2",
 };
 
 function serveStatic(filePath, res) {
@@ -61,9 +61,9 @@ const server = http.createServer(async (req, res) => {
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
 
   const request = new Request(url.toString(), {
-    method:  req.method,
+    method: req.method,
     headers,
-    body:    ["GET", "HEAD"].includes(req.method ?? "GET") ? undefined : body,
+    body: ["GET", "HEAD"].includes(req.method ?? "GET") ? undefined : body,
   });
 
   try {

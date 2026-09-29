@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { downloadCsv, fmtDateTime, todayISO } from "@/lib/fsm";
+import { signedUrl } from "@/lib/offline";
 
 export const Route = createFileRoute("/_authenticated/admin/team")({
   component: AdminTeam,
@@ -27,7 +28,43 @@ type Attendance = {
   in_time: string;
   out_time: string | null;
   in_address: string | null;
+  selfie_path: string | null;
 };
+
+function AttendanceSelfie({ path }: { path: string | null }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (path) {
+      setLoading(true);
+      void signedUrl(path).then((u) => {
+        setUrl(u);
+        setLoading(false);
+      });
+    } else {
+      setLoading(false);
+    }
+  }, [path]);
+
+  if (loading) {
+    return (
+      <div className="shrink-0 h-20 w-20 rounded-lg border border-border bg-muted animate-pulse" />
+    );
+  }
+  if (!url) return null;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="shrink-0 rounded-lg border border-border overflow-hidden"
+      title="View attendance selfie"
+    >
+      <img src={url} alt="Attendance selfie" className="h-20 w-20 object-cover" loading="lazy" />
+    </a>
+  );
+}
 
 function AdminTeam() {
   const [members, setMembers] = useState<Member[]>([]);
@@ -43,7 +80,7 @@ function AdminTeam() {
       supabase.from("user_roles").select("user_id, role"),
       supabase
         .from("attendance")
-        .select("id, engineer_id, work_date, in_time, out_time, in_address")
+        .select("id, engineer_id, work_date, in_time, out_time, in_address, selfie_path")
         .eq("work_date", todayISO()),
     ]);
     setMembers((p as Member[]) ?? []);
@@ -124,6 +161,7 @@ function AdminTeam() {
                     : "Not checked in today"}
                 </p>
               </div>
+              {a?.selfie_path && <AttendanceSelfie path={a.selfie_path} />}
               <Switch checked={m.is_active} onCheckedChange={() => void toggleActive(m)} />
             </div>
           );

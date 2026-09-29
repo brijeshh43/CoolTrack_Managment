@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { fmtDate, fmtDateTime, getPosition, todayISO } from "@/lib/fsm";
 import { fileToDataUrl } from "@/lib/offline";
 import { CameraCapture } from "@/components/fsm/camera-capture";
+import { signedUrl } from "@/lib/offline";
 
 export const Route = createFileRoute("/_authenticated/attendance")({
   component: AttendancePage,
@@ -27,6 +28,41 @@ type AttRow = {
   remarks: string | null;
   selfie_path: string | null;
 };
+
+function SelfieThumb({ path }: { path: string | null }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (path) {
+      setLoading(true);
+      void signedUrl(path).then((u) => {
+        setUrl(u);
+        setLoading(false);
+      });
+    } else {
+      setLoading(false);
+    }
+  }, [path]);
+
+  if (loading) {
+    return (
+      <div className="shrink-0 h-16 w-16 rounded-lg border border-border bg-muted animate-pulse" />
+    );
+  }
+  if (!url) return null;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="shrink-0 rounded-lg border border-border overflow-hidden"
+      title="View attendance selfie"
+    >
+      <img src={url} alt="Attendance selfie" className="h-16 w-16 object-cover" loading="lazy" />
+    </a>
+  );
+}
 
 function AttendancePage() {
   const { user } = useAuth();
@@ -239,22 +275,25 @@ function AttendancePage() {
           {history.map((row) => (
             <div
               key={row.id}
-              className="surface-card flex items-center justify-between p-4 text-sm"
+              className="surface-card flex items-center justify-between gap-4 p-4 text-sm"
             >
-              <span className="font-medium">{fmtDate(row.work_date)}</span>
-              <span className="text-muted-foreground">
-                {new Date(row.in_time).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-                {" → "}
-                {row.out_time
-                  ? new Date(row.out_time).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "open"}
-              </span>
+              <div className="flex items-center gap-4 min-w-0 flex-1">
+                <span className="font-medium whitespace-nowrap">{fmtDate(row.work_date)}</span>
+                <span className="text-muted-foreground whitespace-nowrap">
+                  {new Date(row.in_time).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  {" → "}
+                  {row.out_time
+                    ? new Date(row.out_time).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "open"}
+                </span>
+              </div>
+              {row.selfie_path && <SelfieThumb path={row.selfie_path} />}
             </div>
           ))}
           {history.length === 0 && (
