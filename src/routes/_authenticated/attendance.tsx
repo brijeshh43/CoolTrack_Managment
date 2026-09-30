@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Clock, LogIn, LogOut, MapPin, Camera, Loader2, Image } from "lucide-react";
 import { toast } from "sonner";
@@ -153,13 +153,21 @@ function AttendancePage() {
     }
   };
 
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+
   const onSelfie = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) setSelfie(await fileToDataUrl(file));
+    if (file) {
+      setSelfie(await fileToDataUrl(file));
+      // Reset input value so same photo can be re-selected if needed
+      e.target.value = "";
+    }
   };
 
   const handleCameraCapture = (dataUrl: string) => {
     setSelfie(dataUrl);
+    setShowCamera(false);
   };
 
   return (
@@ -198,46 +206,81 @@ function AttendancePage() {
           {!today && (
             <>
               <div className="space-y-3">
-                <label className="cursor-pointer">
-                  <div className="relative aspect-[4/3] rounded-xl border-2 border-dashed border-border overflow-hidden">
-                    {selfie ? (
+                <div className="relative aspect-[4/3] rounded-xl border-2 border-dashed border-border overflow-hidden bg-muted/30">
+                  {selfie ? (
+                    <div className="relative w-full h-full group">
                       <img
                         src={selfie}
                         alt="Attendance selfie"
                         className="w-full h-full object-cover"
                       />
-                    ) : (
-                      <div className="flex h-full items-center justify-center bg-muted">
-                        <Camera className="size-10 text-muted-foreground" />
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-3 flex justify-between items-center text-white">
+                        <span className="text-xs font-medium">Selfie Attached</span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 text-xs px-2"
+                          onClick={() => setSelfie(null)}
+                        >
+                          Remove
+                        </Button>
                       </div>
-                    )}
-                  </div>
-                </label>
-                <div className="flex flex-wrap gap-3">
+                    </div>
+                  ) : (
+                    <div
+                      className="flex flex-col h-full items-center justify-center bg-muted/40 cursor-pointer p-4 text-center space-y-2 hover:bg-muted/60 transition-colors"
+                      onClick={() => cameraInputRef.current?.click()}
+                    >
+                      <Camera className="size-10 text-primary animate-pulse" />
+                      <p className="text-sm font-medium">Tap to Take Selfie</p>
+                      <p className="text-xs text-muted-foreground">Front camera required for punch in</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="lg"
+                    className="flex-1 min-w-[130px] gap-2"
+                    onClick={() => cameraInputRef.current?.click()}
+                    disabled={busy}
+                  >
+                    <Camera className="size-4" /> {selfie ? "Retake Selfie" : "Take Selfie"}
+                  </Button>
                   <Button
                     size="lg"
                     variant="outline"
-                    className="flex-1 min-w-[140px] gap-2"
-                    onClick={() => setShowCamera(true)}
+                    className="flex-1 min-w-[130px] gap-2"
+                    onClick={() => galleryInputRef.current?.click()}
                     disabled={busy}
                   >
-                    <Camera className="size-4" /> Use Camera
+                    <Image className="size-4" /> Gallery
                   </Button>
                   <Button
                     size="lg"
-                    variant="secondary"
-                    className="flex-1 min-w-[140px] gap-2"
-                    onClick={() => document.getElementById("selfie-upload")?.click()}
+                    variant="ghost"
+                    className="gap-2 text-muted-foreground"
+                    onClick={() => setShowCamera(true)}
                     disabled={busy}
+                    title="Open live camera viewfinder"
                   >
-                    <Image className="size-4" /> Upload Photo
+                    Live View
                   </Button>
                 </div>
+
                 <input
-                  id="selfie-upload"
+                  ref={cameraInputRef}
                   type="file"
                   accept="image/*"
                   capture="user"
+                  hidden
+                  onChange={onSelfie}
+                />
+                <input
+                  ref={galleryInputRef}
+                  type="file"
+                  accept="image/*"
                   hidden
                   onChange={onSelfie}
                 />

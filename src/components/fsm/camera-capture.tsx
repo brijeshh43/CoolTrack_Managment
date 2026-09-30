@@ -14,12 +14,14 @@ interface CameraCaptureProps {
 export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(initialImage || null);
   const [showPreview, setShowPreview] = useState(!!initialImage);
   const [isLoading, setIsLoading] = useState(false);
+  const [streamTimeout, setStreamTimeout] = useState(false);
 
   const stopStream = useCallback(() => {
     if (stream) {
@@ -32,22 +34,48 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
     async (mode: "user" | "environment") => {
       setIsLoading(true);
       setPermissionDenied(false);
+      setStreamTimeout(false);
       stopStream();
 
+      // Check if getUserMedia is supported
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setPermissionDenied(true);
+        setIsLoading(false);
+        return;
+      }
+
+      // Timeout helper: if stream takes longer than 4 seconds, show direct camera upload option
+      const timer = setTimeout(() => {
+        setStreamTimeout(true);
+      }, 4000);
+
       try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: mode,
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        });
+        let newStream: MediaStream | null = null;
+        try {
+          // Attempt 1: with ideal facingMode
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: mode },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+        } catch {
+          // Attempt 2: simple video constraint fallback
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+
+        clearTimeout(timer);
         setStream(newStream);
         setFacingMode(mode);
         setShowPreview(false);
         setCapturedImage(null);
       } catch (error) {
+        clearTimeout(timer);
         console.error("Camera access error:", error);
         setPermissionDenied(true);
       } finally {
@@ -64,9 +92,15 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
 
   useEffect(() => {
     if (stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {
-        // Autoplay was prevented, user interaction needed
+      const video = videoRef.current;
+      video.srcObject = stream;
+      video.setAttribute("playsinline", "true");
+      video.setAttribute("autoplay", "true");
+      video.setAttribute("muted", "true");
+      video.onloadedmetadata = () => {
+        video.play().catch((err) => console.warn("Video play error:", err));
+      };
+      video.play().catch(() => {
         console.warn("Video autoplay prevented");
       });
     }
@@ -81,11 +115,11 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
 
     if (!ctx) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
     setCapturedImage(dataUrl);
     setShowPreview(true);
     stopStream();
@@ -103,8 +137,6 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
       onClose();
     }
   };
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -208,14 +240,24 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-muted-foreground">
-                    {isLoading ? (
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                        <span className="text-sm">Starting camera...</span>
+                  <div className="flex flex-col h-full items-center justify-center text-muted-foreground p-6 text-center space-y-4">
+                    {isLoading && !streamTimeout ? (
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="size-10 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                        <span className="text-sm font-medium">Connecting to camera...</span>
                       </div>
                     ) : (
-                      <Camera className="size-12" />
+                      <div className="space-y-3">
+                        <Camera className="size-12 mx-auto text-primary" />
+                        <p className="text-sm text-muted-foreground">
+                          {streamTimeout
+                            ? "Live preview is taking too long. Use device camera directly:"
+                            : "Click below to take a selfie directly using your camera"}
+                        </p>
+                        <Button onClick={triggerFileUpload} className="gap-2">
+                          <Camera className="size-4" /> Open Device Camera
+                        </Button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -226,17 +268,17 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
                 <Button
                   size="xl"
                   variant="default"
-                  onClick={capturePhoto}
-                  disabled={!stream || isLoading}
+                  onClick={stream ? capturePhoto : triggerFileUpload}
+                  disabled={isLoading && !streamTimeout}
                   className="gap-2 px-8"
                 >
-                  <Camera className="size-5" /> Capture
+                  <Camera className="size-5" /> {stream ? "Capture Selfie" : "Take Selfie"}
                 </Button>
               </div>
 
               <div className="flex gap-3 justify-center">
                 <Button variant="outline" onClick={triggerFileUpload} className="gap-2">
-                  <Upload className="size-4" /> Upload Photo
+                  <Upload className="size-4" /> Device Camera / Gallery
                   <input
                     ref={fileInputRef}
                     type="file"
