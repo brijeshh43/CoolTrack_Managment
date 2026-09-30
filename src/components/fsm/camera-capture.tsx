@@ -15,6 +15,8 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -24,18 +26,25 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
   const [streamTimeout, setStreamTimeout] = useState(false);
 
   const stopStream = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [stream]);
+    setStream(null);
+  }, []);
 
   const startCamera = useCallback(
     async (mode: "user" | "environment") => {
       setIsLoading(true);
       setPermissionDenied(false);
       setStreamTimeout(false);
-      stopStream();
+
+      // Stop previous stream if active
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      setStream(null);
 
       // Check if getUserMedia is supported
       if (!navigator?.mediaDevices?.getUserMedia) {
@@ -44,7 +53,7 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
         return;
       }
 
-      // Timeout helper: if stream takes longer than 4 seconds, show direct camera upload option
+      // Timeout fallback: if camera stream doesn't arrive within 4 seconds
       const timer = setTimeout(() => {
         setStreamTimeout(true);
       }, 4000);
@@ -52,17 +61,16 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
       try {
         let newStream: MediaStream | null = null;
         try {
-          // Attempt 1: with ideal facingMode
           newStream = await navigator.mediaDevices.getUserMedia({
             video: {
-              facingMode: { ideal: mode },
+              facingMode: mode,
               width: { ideal: 1280 },
               height: { ideal: 720 },
             },
             audio: false,
           });
         } catch {
-          // Attempt 2: simple video constraint fallback
+          // Fallback to generic video constraint
           newStream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false,
@@ -70,6 +78,7 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
         }
 
         clearTimeout(timer);
+        streamRef.current = newStream;
         setStream(newStream);
         setFacingMode(mode);
         setShowPreview(false);
@@ -82,26 +91,31 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
         setIsLoading(false);
       }
     },
-    [stopStream],
+    [],
   );
 
   useEffect(() => {
-    startCamera("user");
-    return () => stopStream();
-  }, [startCamera, stopStream]);
+    void startCamera("user");
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [startCamera]);
 
   useEffect(() => {
     if (stream && videoRef.current) {
       const video = videoRef.current;
       video.srcObject = stream;
-      video.setAttribute("playsinline", "true");
-      video.setAttribute("autoplay", "true");
-      video.setAttribute("muted", "true");
+      video.playsInline = true;
+      video.muted = true;
+      video.autoplay = true;
       video.onloadedmetadata = () => {
-        video.play().catch((err) => console.warn("Video play error:", err));
+        video.play().catch((err) => console.warn("Video metadata play error:", err));
       };
-      video.play().catch(() => {
-        console.warn("Video autoplay prevented");
+      video.play().catch((err) => {
+        console.warn("Video autoplay prevented:", err);
       });
     }
   }, [stream]);
@@ -115,9 +129,17 @@ export function CameraCapture({ onCapture, onClose, initialImage }: CameraCaptur
 
     if (!ctx) return;
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    canvas.width = w;
+    canvas.height = h;
+
+    // Flip canvas horizontally if using front camera so it acts like a mirror
+    if (facingMode === "user") {
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, w, h);
 
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
     setCapturedImage(dataUrl);

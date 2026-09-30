@@ -242,30 +242,29 @@ function AttendancePage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="lg"
-                    className="flex-1 min-w-[130px] gap-2"
+                    className="flex-1 min-w-[140px] gap-2"
+                    onClick={() => setShowCamera(true)}
+                    disabled={busy}
+                  >
+                    <Camera className="size-4" /> {selfie ? "Retake Photo" : "Use Camera"}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    className="flex-1 min-w-[140px] gap-2"
                     onClick={() => cameraInputRef.current?.click()}
                     disabled={busy}
                   >
-                    <Camera className="size-4" /> {selfie ? "Retake Selfie" : "Take Selfie"}
+                    <Camera className="size-4" /> Device Camera
                   </Button>
                   <Button
                     size="lg"
                     variant="outline"
-                    className="flex-1 min-w-[130px] gap-2"
+                    className="min-w-[100px] gap-2"
                     onClick={() => galleryInputRef.current?.click()}
                     disabled={busy}
                   >
                     <Image className="size-4" /> Gallery
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="ghost"
-                    className="gap-2 text-muted-foreground"
-                    onClick={() => setShowCamera(true)}
-                    disabled={busy}
-                    title="Open live camera viewfinder"
-                  >
-                    Live View
                   </Button>
                 </div>
 
