@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, Images, Loader2, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { captureAndStore, signedUrl } from "@/lib/offline";
+import { captureAndStore, getJobQueuedMedia, signedUrl } from "@/lib/offline";
 import { supabase } from "@/integrations/supabase/client";
 import { fmtDateTime } from "@/lib/fsm";
 
@@ -23,15 +23,43 @@ export function useJobMedia(jobId: string) {
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    const { data } = await supabase
-      .from("job_media")
-      .select(
-        "id, kind, storage_path, label, checklist_key, remarks, latitude, longitude, captured_at",
-      )
-      .eq("job_id", jobId)
-      .order("captured_at", { ascending: true });
-    setMedia((data as MediaRow[]) ?? []);
-    setLoading(false);
+    let remoteItems: MediaRow[] = [];
+    try {
+      const { data } = await supabase
+        .from("job_media")
+        .select(
+          "id, kind, storage_path, label, checklist_key, remarks, latitude, longitude, captured_at",
+        )
+        .eq("job_id", jobId)
+        .order("captured_at", { ascending: true });
+      remoteItems = (data as MediaRow[]) ?? [];
+    } catch {
+      /* offline or network error */
+    }
+
+    try {
+      const localQueued = await getJobQueuedMedia(jobId);
+      const localRows: MediaRow[] = localQueued.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        storage_path: item.dataUrl,
+        label: item.label,
+        checklist_key: item.checklistKey,
+        remarks: item.remarks ? `${item.remarks} (Offline)` : "Offline",
+        latitude: item.latitude,
+        longitude: item.longitude,
+        captured_at: item.capturedAt,
+      }));
+
+      // Combine remote items with any local queued items (deduplicating by ID)
+      const existingIds = new Set(remoteItems.map((r) => r.id));
+      const combined = [...remoteItems, ...localRows.filter((l) => !existingIds.has(l.id))];
+      setMedia(combined);
+    } catch {
+      setMedia(remoteItems);
+    } finally {
+      setLoading(false);
+    }
   }, [jobId]);
 
   useEffect(() => {
@@ -42,8 +70,17 @@ export function useJobMedia(jobId: string) {
 }
 
 export function MediaThumb({ item }: { item: MediaRow }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [url, setUrl] = useState<string | null>(
+    item.storage_path.startsWith("data:") || item.storage_path.startsWith("blob:")
+      ? item.storage_path
+      : null,
+  );
+
   useEffect(() => {
+    if (item.storage_path.startsWith("data:") || item.storage_path.startsWith("blob:")) {
+      setUrl(item.storage_path);
+      return;
+    }
     void signedUrl(item.storage_path).then(setUrl);
   }, [item.storage_path]);
 

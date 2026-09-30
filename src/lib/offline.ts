@@ -4,22 +4,23 @@ import { getPosition } from "./fsm";
 /**
  * Offline-first helpers.
  *
- * Drafts (form values, checklist remarks, signature) are always written to
- * localStorage first so an engineer never loses work in a basement plant room.
- * Media captured while offline is queued as a data URL and flushed when the
- * browser reports connectivity again.
+ * Drafts (form values, checklist remarks, signature) are written safely with try/catch.
+ * Media captured is compressed and stored in IndexedDB (which has hundreds of MBs quota
+ * compared to localStorage's 5MB limit), flushing when connectivity is restored.
  */
 
 const DRAFT_PREFIX = "fsm:draft:";
-const QUEUE_KEY = "fsm:mediaQueue";
+const IDB_NAME = "cooltrack_fsm_db";
+const IDB_STORE = "media_queue";
+const IDB_VERSION = 1;
 
 export type SyncState = "idle" | "offline" | "syncing" | "synced";
 
 export function saveDraft<T>(jobId: string, data: T) {
   try {
     localStorage.setItem(DRAFT_PREFIX + jobId, JSON.stringify({ data, at: Date.now() }));
-  } catch {
-    /* storage full — ignore */
+  } catch (err) {
+    console.warn("Storage quota reached or localStorage unavailable for draft:", err);
   }
 }
 
@@ -34,7 +35,11 @@ export function loadDraft<T>(jobId: string): T | null {
 }
 
 export function clearDraft(jobId: string) {
-  localStorage.removeItem(DRAFT_PREFIX + jobId);
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + jobId);
+  } catch {
+    /* ignore */
+  }
 }
 
 export type QueuedMedia = {
@@ -53,24 +58,175 @@ export type QueuedMedia = {
   dataUrl: string;
 };
 
-function readQueue(): QueuedMedia[] {
+// In-memory cache of queued media for synchronous checks and offline state
+let inMemoryQueue: QueuedMedia[] = [];
+let idbAvailable = true;
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined" || !window.indexedDB) {
+      idbAvailable = false;
+      reject(new Error("IndexedDB not available"));
+      return;
+    }
+    const request = window.indexedDB.open(IDB_NAME, IDB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      idbAvailable = false;
+      reject(request.error);
+    };
+  });
+}
+
+// Initialize queue from IDB and clean up any legacy bloated localStorage items
+if (typeof window !== "undefined") {
+  // Clear any old oversized localStorage mediaQueue to free space immediately
   try {
-    return JSON.parse(localStorage.getItem(QUEUE_KEY) ?? "[]") as QueuedMedia[];
+    const legacy = localStorage.getItem("fsm:mediaQueue");
+    if (legacy) {
+      localStorage.removeItem("fsm:mediaQueue");
+    }
   } catch {
-    return [];
+    /* ignore */
+  }
+
+  void (async () => {
+    try {
+      const items = await getQueuedMedia();
+      inMemoryQueue = items;
+    } catch {
+      /* ignore */
+    }
+  })();
+}
+
+export async function getQueuedMedia(): Promise<QueuedMedia[]> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const items = (req.result as QueuedMedia[]) || [];
+        inMemoryQueue = items;
+        resolve(items);
+      };
+      req.onerror = () => resolve(inMemoryQueue);
+    });
+  } catch {
+    return inMemoryQueue;
   }
 }
 
-function writeQueue(items: QueuedMedia[]) {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(items));
+export async function addQueuedMedia(item: QueuedMedia): Promise<void> {
+  inMemoryQueue = [...inMemoryQueue.filter((x) => x.id !== item.id), item];
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.put(item);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn("Failed to store media in IndexedDB, saved to memory:", err);
+  }
+}
+
+export async function removeQueuedMedia(id: string): Promise<void> {
+  inMemoryQueue = inMemoryQueue.filter((x) => x.id !== id);
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => resolve();
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function getJobQueuedMedia(jobId: string): Promise<QueuedMedia[]> {
+  const all = await getQueuedMedia();
+  return all.filter((item) => item.jobId === jobId);
 }
 
 export function queueSize(): number {
-  return readQueue().length;
+  return inMemoryQueue.length;
 }
 
 export function enqueueMedia(item: QueuedMedia) {
-  writeQueue([...readQueue(), item]);
+  void addQueuedMedia(item);
+}
+
+/**
+ * Resizes and compresses images in-browser to prevent high-res mobile photos (10MB+)
+ * from blowing quotas and choking mobile networks.
+ */
+export async function compressImage(
+  file: Blob | File,
+  maxWidth = 1600,
+  maxHeight = 1600,
+  quality = 0.82,
+): Promise<Blob> {
+  if (!file.type || !file.type.startsWith("image/")) {
+    return file;
+  }
+
+  // Skip tiny files (< 200KB)
+  if (file.size < 200 * 1024) {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    const img = document.createElement("img");
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxWidth || height > maxHeight) {
+        if (width / height > maxWidth / maxHeight) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        } else {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          resolve(blob || file);
+        },
+        "image/jpeg",
+        quality,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
+    img.src = url;
+  });
 }
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
@@ -78,7 +234,7 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return res.blob();
 }
 
-export function fileToDataUrl(file: File): Promise<string> {
+export function fileToDataUrl(file: Blob | File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -139,13 +295,27 @@ export async function captureAndStore(params: {
   checklistKey?: string | null;
   label?: string | null;
   remarks?: string | null;
-  file: File;
+  file: File | Blob;
 }): Promise<"uploaded" | "queued"> {
   const geo = await getPosition();
   const capturedAt = new Date().toISOString();
 
+  // Compress photo before uploading or queuing
+  let processedBlob: Blob = params.file;
+  if (params.kind === "photo") {
+    try {
+      processedBlob = await compressImage(params.file, 1600, 1600, 0.82);
+    } catch (err) {
+      console.warn("Compression failed, using original:", err);
+      processedBlob = params.file;
+    }
+  }
+
+  const fileName = (params.file as File).name || `${params.kind}_${Date.now()}.jpg`;
+
   if (typeof navigator !== "undefined" && !navigator.onLine) {
-    enqueueMedia({
+    const dataUrl = await fileToDataUrl(processedBlob);
+    await addQueuedMedia({
       id: crypto.randomUUID(),
       jobId: params.jobId,
       customerId: params.customerId,
@@ -157,8 +327,8 @@ export async function captureAndStore(params: {
       latitude: geo.latitude,
       longitude: geo.longitude,
       capturedAt,
-      fileName: params.file.name || `${params.kind}.jpg`,
-      dataUrl: await fileToDataUrl(params.file),
+      fileName,
+      dataUrl,
     });
     return "queued";
   }
@@ -166,15 +336,17 @@ export async function captureAndStore(params: {
   try {
     await uploadMedia({
       ...params,
-      file: params.file,
-      fileName: params.file.name || `${params.kind}.jpg`,
+      file: processedBlob,
+      fileName,
       latitude: geo.latitude,
       longitude: geo.longitude,
       capturedAt,
     });
     return "uploaded";
-  } catch {
-    enqueueMedia({
+  } catch (err) {
+    console.warn("Online upload failed, queuing media offline in IndexedDB:", err);
+    const dataUrl = await fileToDataUrl(processedBlob);
+    await addQueuedMedia({
       id: crypto.randomUUID(),
       jobId: params.jobId,
       customerId: params.customerId,
@@ -186,8 +358,8 @@ export async function captureAndStore(params: {
       latitude: geo.latitude,
       longitude: geo.longitude,
       capturedAt,
-      fileName: params.file.name || `${params.kind}.jpg`,
-      dataUrl: await fileToDataUrl(params.file),
+      fileName,
+      dataUrl,
     });
     return "queued";
   }
@@ -195,9 +367,8 @@ export async function captureAndStore(params: {
 
 /** Flush anything captured while offline. */
 export async function flushQueue(): Promise<number> {
-  const items = readQueue();
+  const items = await getQueuedMedia();
   if (items.length === 0) return 0;
-  const remaining: QueuedMedia[] = [];
   let synced = 0;
   for (const item of items) {
     try {
@@ -216,31 +387,42 @@ export async function flushQueue(): Promise<number> {
         longitude: item.longitude,
         capturedAt: item.capturedAt,
       });
+      await removeQueuedMedia(item.id);
       synced += 1;
-    } catch {
-      remaining.push(item);
+    } catch (err) {
+      console.warn(`Failed to flush queued media ${item.id}:`, err);
     }
   }
-  writeQueue(remaining);
   return synced;
 }
 
 export async function signedUrl(path: string, expiresIn = 3600): Promise<string | null> {
-  const { data } = await supabase.storage.from("job-media").createSignedUrl(path, expiresIn);
-  return data?.signedUrl ?? null;
+  if (path.startsWith("data:") || path.startsWith("blob:")) {
+    return path;
+  }
+  try {
+    const { data } = await supabase.storage.from("job-media").createSignedUrl(path, expiresIn);
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function logLocation(event: string, jobId: string | null) {
   const geo = await getPosition();
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) return geo;
-  await supabase.from("location_logs").insert({
-    job_id: jobId,
-    user_id: data.user.id,
-    event,
-    latitude: geo.latitude,
-    longitude: geo.longitude,
-  });
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) return geo;
+    await supabase.from("location_logs").insert({
+      job_id: jobId,
+      user_id: data.user.id,
+      event,
+      latitude: geo.latitude,
+      longitude: geo.longitude,
+    });
+  } catch {
+    /* ignore offline */
+  }
   return geo;
 }
 
@@ -250,13 +432,17 @@ export async function writeAudit(
   action: string,
   details: Record<string, unknown> = {},
 ) {
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) return;
-  await supabase.from("audit_logs").insert({
-    actor_id: data.user.id,
-    entity,
-    entity_id: entityId,
-    action,
-    details: details as never,
-  });
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) return;
+    await supabase.from("audit_logs").insert({
+      actor_id: data.user.id,
+      entity,
+      entity_id: entityId,
+      action,
+      details: details as never,
+    });
+  } catch {
+    /* ignore offline */
+  }
 }

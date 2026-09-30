@@ -8,9 +8,8 @@ import { BottomNav } from "@/components/fsm/bottom-nav";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { fmtDate, fmtDateTime, getPosition, todayISO } from "@/lib/fsm";
-import { fileToDataUrl } from "@/lib/offline";
+import { compressImage, fileToDataUrl, signedUrl } from "@/lib/offline";
 import { CameraCapture } from "@/components/fsm/camera-capture";
-import { signedUrl } from "@/lib/offline";
 
 export const Route = createFileRoute("/_authenticated/attendance")({
   component: AttendancePage,
@@ -99,9 +98,10 @@ function AttendancePage() {
       const geo = await getPosition();
       let selfiePath: string | null = null;
       if (selfieDataUrl) {
-        const blob = await (await fetch(selfieDataUrl)).blob();
+        const rawBlob = await (await fetch(selfieDataUrl)).blob();
+        const compressedBlob = await compressImage(rawBlob, 1000, 1000, 0.8);
         const path = `attendance/${user.id}/${todayISO()}-${Date.now()}.jpg`;
-        const { error } = await supabase.storage.from("job-media").upload(path, blob, {
+        const { error } = await supabase.storage.from("job-media").upload(path, compressedBlob, {
           contentType: "image/jpeg",
         });
         if (!error) selfiePath = path;
