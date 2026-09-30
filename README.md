@@ -1,29 +1,48 @@
-# Welcome to your Lovable project
+# CoolTrack — HVAC & Field Service Management
 
-This project was built with [Lovable](https://lovable.dev).
+CoolTrack is a modern, offline-first Field Service Management (FSM) platform designed for HVAC companies and field engineering teams. It streamlines preventive maintenance, breakdown service, installation, commissioning, attendance tracking, and customer sign-offs.
 
-## Build with Lovable
+## Key Features
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+- **Field Engineering Workflows**: Step-by-step job execution (PM, Breakdown, Installation, Commissioning).
+- **Offline-First Resilience**: Automatic local queueing and sync with IndexedDB when working in basements or offline plant rooms.
+- **Client-Side Media Compression**: In-browser photo and selfie compression for fast, lightweight evidence capture.
+- **Digital Customer Acceptance**: Touch signature pad with GPS coordinate logging.
+- **Instant Service Reports**: Formatted print-ready and PDF-exportable service reports.
+- **Attendance & GPS Geo-Logging**: Engineer duty tracking with selfie check-in.
+- **Admin Command Center**: Customer records, unit tracking, spare parts inventory, and team oversight.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+## Getting Started Locally
 
-## Development
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+2. **Configure environment:**
+   Create or edit `.env`:
+   ```env
+   VITE_SUPABASE_URL=your-supabase-url
+   VITE_SUPABASE_PUBLISHABLE_KEY=your-supabase-key
+   SUPABASE_URL=your-supabase-url
+   SUPABASE_PUBLISHABLE_KEY=your-supabase-key
+   SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-key
+   ```
 
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
-```
+3. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
 
-## Built with
+4. **Seed default admin & engineer accounts:**
+   ```bash
+   npm run seed:users
+   ```
 
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
+## Built With
+
+- **Framework**: TanStack Start & React 19
+- **Routing & SSR**: TanStack Router
+- **Database & Storage**: PostgreSQL & Supabase
+- **Styling**: Tailwind CSS & Lucide Icons
+- **Offline Storage**: IndexedDB
